@@ -1,6 +1,6 @@
 """Command-line entry point.
 
-    python -m screener --threshold-jpy 5000 --always-include TSLA
+    python -m screener --threshold-jpy 2000 --always-include TSLA
 
 Writes three things under ``--out-dir``:
 
@@ -22,14 +22,19 @@ from . import fetch, fx, metrics, screen, universe
 
 log = logging.getLogger("screener")
 
+# At ~150 JPY/USD this is a ~13 USD average daily range. A 5,000 JPY bar --
+# ~33 USD -- only ever matched a few dozen four-figure share prices, which
+# was too narrow a net to be useful.
+DEFAULT_THRESHOLD_JPY = 2000.0
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="screener",
         description="Collect chart data for US stocks whose average daily range exceeds a JPY threshold.",
     )
-    p.add_argument("--threshold-jpy", type=float, default=5000.0,
-                   help="minimum average daily high-low range, in yen (default: 5000)")
+    p.add_argument("--threshold-jpy", type=float, default=DEFAULT_THRESHOLD_JPY,
+                   help=f"minimum average daily high-low range, in yen (default: {DEFAULT_THRESHOLD_JPY:.0f})")
     p.add_argument("--universe", choices=("seed", "sp500", "all"), default="seed",
                    help="which tickers to screen (default: seed, the bundled offline list)")
     p.add_argument("--universe-file", default=None,

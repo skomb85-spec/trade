@@ -106,3 +106,18 @@ def test_seed_universe_includes_tsla_and_has_no_duplicates():
     seed = universe.load_seed()
     assert "TSLA" in seed
     assert len(seed) == len(set(seed))
+
+
+def test_cli_default_threshold_is_2000_jpy():
+    from screener.cli import build_parser
+
+    assert build_parser().parse_args([]).threshold_jpy == pytest.approx(2000.0)
+
+
+def test_tsla_sized_range_clears_the_2000_jpy_default():
+    # ~400 USD share, ~14 USD daily range -> ~2,100 JPY: over the new bar,
+    # well under the old 5,000 one.
+    frames = {"TSLA": make_frame(close=400.0, day_range=14.0)}
+    table = metrics.build_table(frames, USDJPY)
+    assert bool(screen.apply(table, threshold_jpy=2000.0).iloc[0]["passes"])
+    assert not bool(screen.apply(table, threshold_jpy=5000.0).iloc[0]["passes"])
