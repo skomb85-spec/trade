@@ -2,3 +2,10 @@ pandas>=2.0
 yfinance>=0.2.55
 requests>=2.31
 lxml>=4.9
+
+# Intraday history (1-minute bars back to 2016, IEX feed on the free tier)
+alpaca-py>=0.33
+
+# Optional: writes minute bars as parquet instead of gzipped CSV.
+# A decade of 1m bars is ~1M rows per symbol, so this matters.
+pyarrow>=15.0
