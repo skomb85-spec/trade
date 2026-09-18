@@ -121,6 +121,7 @@ def walk_forward(
     objective: str = "expectancy",
     min_train_trades: int = 20,
     baseline: bool = True,
+    runner=run,
 ) -> WalkForwardResult:
     combos = list(iter_params(strategy_cls))
     spans = make_windows(len(sessions), train_sessions, test_sessions)
@@ -142,7 +143,7 @@ def walk_forward(
 
         best_score, best_params, best_train = float("-inf"), None, Summary()
         for params in combos:
-            trades = run(symbol, train_set, strategy_cls(**params), sizer, costs, usdjpy)
+            trades = runner(symbol, train_set, strategy_cls(**params), sizer, costs, usdjpy)
             summary = summarise(trades, target_jpy)
             # Too few trades to distinguish an edge from a lucky handful.
             if summary.n_trades < min_train_trades:
@@ -156,7 +157,7 @@ def walk_forward(
                      i, min_train_trades)
             continue
 
-        test_trades = run(symbol, test_set, strategy_cls(**best_params), sizer, costs, usdjpy)
+        test_trades = runner(symbol, test_set, strategy_cls(**best_params), sizer, costs, usdjpy)
         test_summary = summarise(test_trades, target_jpy)
 
         # What the average parameter set earned out of sample, as the bar
@@ -165,7 +166,7 @@ def walk_forward(
         if baseline:
             scores = []
             for params in combos:
-                t = run(symbol, test_set, strategy_cls(**params), sizer, costs, usdjpy)
+                t = runner(symbol, test_set, strategy_cls(**params), sizer, costs, usdjpy)
                 if t:
                     scores.append(summarise(t, target_jpy).expectancy_jpy)
             window_baseline = sum(scores) / len(scores) if scores else 0.0
@@ -181,7 +182,7 @@ def walk_forward(
             test_trades=test_trades,
         ))
         oos_trades.extend(test_trades)
-        is_trades.extend(run(symbol, train_set, strategy_cls(**best_params),
+        is_trades.extend(runner(symbol, train_set, strategy_cls(**best_params),
                              sizer, costs, usdjpy))
         log.info("  window %d %s..%s: chose %s -> OOS %s JPY over %d trades",
                  i, test_set[0][0], test_set[-1][0], best_params,

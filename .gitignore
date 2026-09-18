@@ -7,6 +7,8 @@ venv/
 .ruff_cache/
 *.egg-info/
 
-# Fetched market data and screener output
+# Fetched market data and tool output
 data/cache/
 data/out/
+data/minute/
+data/backtest/

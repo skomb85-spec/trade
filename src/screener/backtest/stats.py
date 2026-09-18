@@ -30,7 +30,10 @@ class Summary:
     max_drawdown_jpy: float = 0.0
     median_daily_pnl_jpy: float = 0.0
     pct_days_at_target: float = 0.0
+    pct_trades_at_target: float = 0.0
+    avg_hold_days: float = 0.0
     sharpe: float = 0.0
+    t_stat: float = 0.0
     stopped_out_pct: float = 0.0
     hit_target_pct: float = 0.0
     timed_out_pct: float = 0.0
@@ -56,7 +59,17 @@ def summarise(trades: list[Trade], target_jpy: float = 5000.0) -> Summary:
     drawdown = equity - equity.cummax()
 
     reasons = pd.Series([t.exit_reason for t in trades])
+    hold = pd.Series(
+        [max((t.exit_time - t.entry_time).days, 0) for t in trades], dtype=float
+    )
     n = len(trades)
+
+    # Is the mean distinguishable from zero at all? With a few dozen trades
+    # and a spread of several thousand yen, an expectancy of a few hundred
+    # is noise, however positive it reads.
+    t_stat = 0.0
+    if len(pnl) > 1 and pnl.std(ddof=1) > 0:
+        t_stat = float(pnl.mean() / (pnl.std(ddof=1) / math.sqrt(len(pnl))))
 
     sharpe = 0.0
     if len(daily) > 1 and daily.std(ddof=1) > 0:
@@ -75,10 +88,13 @@ def summarise(trades: list[Trade], target_jpy: float = 5000.0) -> Summary:
         max_drawdown_jpy=round(float(drawdown.min()), 0),
         median_daily_pnl_jpy=round(float(daily.median()), 1),
         pct_days_at_target=round(float((daily >= target_jpy).mean()) * 100, 2),
+        pct_trades_at_target=round(float((pnl >= target_jpy).mean()) * 100, 2),
+        avg_hold_days=round(float(hold.mean()), 2) if not hold.empty else 0.0,
         sharpe=round(sharpe, 3),
+        t_stat=round(t_stat, 2),
         stopped_out_pct=round(float((reasons == "stop").mean()) * 100, 1),
         hit_target_pct=round(float((reasons == "target").mean()) * 100, 1),
-        timed_out_pct=round(float((reasons == "close").mean()) * 100, 1),
+        timed_out_pct=round(float(reasons.isin(["close", "max_hold"]).mean()) * 100, 1),
     )
 
 
@@ -92,6 +108,10 @@ def format_summary(label: str, s: Summary) -> str:
         f"  total {s.total_pnl_jpy:>12,.0f} JPY   expectancy {s.expectancy_jpy:>9,.0f} JPY/trade\n"
         f"  avg win {s.avg_win_jpy:>9,.0f}   avg loss {s.avg_loss_jpy:>9,.0f}   profit factor {pf}\n"
         f"  median day {s.median_daily_pnl_jpy:>9,.0f} JPY   max drawdown {s.max_drawdown_jpy:>10,.0f} JPY\n"
-        f"  days at target {s.pct_days_at_target:>5.1f}%   annualised Sharpe {s.sharpe:.2f}\n"
+        f"  days at target {s.pct_days_at_target:>5.1f}%   "
+        f"trades at target {s.pct_trades_at_target:>5.1f}%   "
+        f"avg hold {s.avg_hold_days:>4.1f}d\n"
+        f"  Sharpe {s.sharpe:.2f}   t-stat {s.t_stat:+.2f}"
+        f"{'' if abs(s.t_stat) >= 2 else '  (not distinguishable from zero)'}\n"
         f"  exits: stop {s.stopped_out_pct:.0f}% / target {s.hit_target_pct:.0f}% / close {s.timed_out_pct:.0f}%"
     )

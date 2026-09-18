@@ -226,22 +226,52 @@ train 期間でパラメータを選び、その直後の test 期間だけで�
 - パラメータ安定性 — window ごとに選ばれる値が毎回変わるなら、集計 OOS が黒字でもノイズを拾って
   いるだけです。
 
-### シミュレーションの3つの誠実さのルール（`engine.py`）
+### シミュレーションの3つの誠実さのルール（`engine.py` / `swing.py`）
 
 - バー i のシグナルは バー i+1 の始値で約定する（バー i の終値や、トリガー価格ちょうどでは約定
   させない）
-- 1本のバーが stop と target の両方を含む場合、stop が先に当たったものとして扱う（分足はどちら
-  が先か記録していないため、自分に有利に解釈しない）
-- 全ポジションは引けでフラット。オーバーナイトは持たない
+- 1本のバーが stop と target の両方を含む場合、stop が先に当たったものとして扱う（分足も日足も
+  どちらが先かは記録していないため、自分に有利に解釈しない）
+- ポジションは重複させない。1本の手仕舞い後にだけ次のシグナルを探す。`intraday` は全ポジション
+  を引けでフラットにし（オーバーナイトは持たない）、`swing` はこれを `max_hold` セッションでの
+  強制手仕舞いに置き換える。swing ではオーバーナイトギャップがそのまま反映されるため、ストップ
+  を飛び越えるギャップもストップ価格で約定したことにしており、これは楽観的な想定です
+
+### swing と intraday — 2つのモードが1つのwalk-forward基盤を共有する
+
+| モード | バー | 保有 | データ源 | 履歴 |
+|---|---|---|---|---|
+| `swing`（デフォルト） | 日足 | 2〜7セッション | `data/cache`（スクリーナーが取得済み） | 数十年 |
+| `intraday` | 分足 | 引けでフラット | `data/minute`（Alpaca） | 2016年〜 |
+
+swing がデフォルトになったのは、日足は履歴が桁違いに長くサンプル数が多いので過学習しにくく、5
+日に1往復ならスリッページは誤差に収まるからです。デイトレでは0.3%の値幅に対し往復コストが利益
+の3分の1を食いますが、スイングではそこまで効きません。
 
 ### 使い方
 
 ```bash
-PYTHONPATH=src python -m screener.backtest --symbols TSLA,MSTR --strategy all
-PYTHONPATH=src python -m screener.backtest --from-passed data/out/passed.csv --strategy orb
+PYTHONPATH=src python -m screener.backtest --symbols TSLA,MSTR
+PYTHONPATH=src python -m screener.backtest --from-passed data/out/passed.csv --strategy donchian
+PYTHONPATH=src python -m screener.backtest --mode intraday --symbols TSLA
 ```
 
-### 戦略（`strategies.py`）
+### 戦略（`swing_strategies.py`、`--mode swing`）
+
+いずれも108通りの組み合わせがあり、**すべてロングオンリー**です（空売りは借株や買い戻しリスク
+をモデル化していないため対象外）。
+
+- `donchian`（DonchianBreakout） — 直近N日の高値終値ブレイクを買う。params: lookback, atr_mult,
+  target_r, max_hold
+- `rsi`（RSIPullback） — 上昇トレンド内の短期売られ過ぎを買う（Connors の RSI(2) 系）。params:
+  rsi_period, entry_level, trend_ma, target_r, max_hold
+- `macross`（MACross） — 短期移動平均が長期を上抜けた日に買う。params: fast, slow, atr_mult,
+  target_r, max_hold
+
+インジケータは因果的（causal）です。shift(1) 等で当日の値を混入させず、約定は必ず翌バーの始値
+です。
+
+### 戦略（`strategies.py`、`--mode intraday`）
 
 - `orb`（OpeningRangeBreakout） — 寄り付きN分のレンジのブレイクに乗る。params: or_minutes,
   target_r, direction。48通り
@@ -250,15 +280,23 @@ PYTHONPATH=src python -m screener.backtest --from-passed data/out/passed.csv --s
 - `gap`（GapFill） — 寄り付きのギャップを前日終値方向に狙う。params: min_gap_pct, max_gap_pct,
   stop_pct, entry_minute。81通り
 
+### 有意性判定（t統計量）
+
+OOS expectancy が正でも、取引数が少なく1取引ごとのばらつきが大きければそれはノイズです。
+`stats.py` は `t_stat`（平均を標準誤差で割った値）を計算しており、`|t| < 2` の場合は "not
+distinguishable from zero" として棄却します。baseline比較（全パラメータの平均を上回るか）だけ
+では足りません。baseline を上回っていても t が小さければ、それは依然として偶然の範囲内です。
+
 ### CLIオプション（`src/screener/backtest/cli.py`）
 
 | フラグ | デフォルト | 説明 |
 | --- | --- | --- |
 | `--symbols` | （`--from-passed` と排他・必須） | カンマ区切りのティッカー、例: `TSLA,MSTR` |
 | `--from-passed` | （`--symbols` と排他・必須） | screen の `passed.csv` へのパス |
-| `--strategy` | `all` | 戦略名（`orb` / `vwap` / `gap`）または `all` |
-| `--data-dir` | `data/minute` | 分足データのディレクトリ |
-| `--bar-minutes` | `5` | テスト前に1分足をこのバー幅に集約する |
+| `--mode` | `swing` | `swing`（日足、2〜7セッション保有、デフォルト）または `intraday`（分足、引けでフラット） |
+| `--strategy` | `all` | 選んだモードの戦略名、または `all` |
+| `--data-dir` | `None`（モード依存） | バーのディレクトリ（デフォルト: swing は `data/cache`、intraday は `data/minute`） |
+| `--bar-minutes` | `None`（モード依存） | intraday専用: 1分足をこのバー幅に集約する（デフォルト5） |
 
 account and risk（資金とリスク）:
 
@@ -267,7 +305,7 @@ account and risk（資金とリスク）:
 | `--capital-usd` | `4000.0` | 口座の資金額（USD） |
 | `--risk-pct` | `1.0` | 1トレードあたりリスクにさらす資金の割合（%） |
 | `--fractional` | `False`（フラグ） | 端株（fractional shares）を許可する |
-| `--target-jpy` | `5000.0` | 「目標達成日」の判定に使う1日あたりの目標利益（円） |
+| `--target-jpy` | `None`（モード依存） | 利益目標（円）。swing は1取引あたり（デフォルト10,000）、intraday は1日あたり（デフォルト5,000） |
 | `--fx-rate` | `None` | USD/JPY を固定する |
 
 costs（コスト）:
@@ -281,8 +319,8 @@ walk-forward:
 
 | フラグ | デフォルト | 説明 |
 | --- | --- | --- |
-| `--train-sessions` | `250` | 訓練 window の取引日数（デフォルトは約1年） |
-| `--test-sessions` | `60` | out-of-sample window の取引日数 |
+| `--train-sessions` | `None`（モード依存） | 訓練 window の取引日数（デフォルト: swing 500、intraday 250） |
+| `--test-sessions` | `None`（モード依存） | out-of-sample window の取引日数（デフォルト: swing 125、intraday 60） |
 | `--objective` | `expectancy` | 訓練 window が最大化する対象（`expectancy` / `total` /
   `sharpe` / `profit_factor` から選択） |
 | `--min-train-trades` | `20` | 訓練取引数がこれ未満のパラメータ組み合わせは無視する |
@@ -292,6 +330,20 @@ walk-forward:
 | --- | --- | --- |
 | `--out-dir` | `data/backtest` | 出力ディレクトリ |
 | `-v`, `--verbose` | `False`（フラグ） | デバッグログを出力する |
+
+`--data-dir` / `--train-sessions` / `--test-sessions` / `--target-jpy` / `--bar-minutes` はいず
+れもモード依存のデフォルトを持ちます（`cli.py` の `MODE_DEFAULTS`）。値を明示すれば、モードに
+関係なくその値が使われます。
+
+### 起動時の表示
+
+実行のたびに `main()` は次の2つを表示します。
+
+- 「2R の勝ちトレードで目標に届くのに必要なリスク率」（`target_jpy / usdjpy / 2 / capital *
+  100`）。資金 $4,000 で目標 10,000 JPY なら **0.83%/取引** です。`--risk-pct` がこれを下回っ
+  ていれば、2Rの勝ちを積み重ねても目標には届きません。
+- swing モードで目標到達が 0% かつ expectancy が正のとき、「ポジションサイズが制約であって戦略
+  ではない。`--risk-pct` を上げるか `--fractional` を使え」という趣旨の一文を表示します。
 
 ### コストモデル（`costs.py`）
 
@@ -321,25 +373,46 @@ walk-forward の枠組みが正しく機能するかを、答えが構成上わ�
 sample で -118 JPY/取引として正しく棄却しています。この検証がなければ「勝ちパターンを発見した」
 と誤認するところでした。
 
+同じ検証を `swing` モードでも行いました。こちらも合成日足データでエッジの有無を作り分けていま
+す。
+
+| 銘柄 | 構造 | Out-of-sample | t統計量 | 判定 |
+|---|---|---|---|---|
+| DRANDOM | エッジ無し（ランダムウォーク） | +165 JPY/取引（122取引） | +0.21 | not distinguishable from zero |
+| DTREND | エッジ有り（20日高値ブレイク後に5日ドリフト） | +6,969 JPY/取引（99取引）、目標達成 43.4%、平均保有 5.7日 | +5.95 | positive |
+
+ここでも同じ落とし穴が確認できます。DRANDOM は expectancy が正（+165円）で、all-parameter
+baseline（-691円）も上回っていました。baseline比較だけを見れば「positive」と誤判定するところ
+でしたが、t = +0.21 は `|t| = 2` を大きく下回っており、実際には棄却されます。t統計量による判定
+が無ければ、ここでもノイズを「勝ちパターン」と誤認していました。
+
+もう一つの発見です。最初の実行では DRANDOM・DTREND とも目標到達 0.0% でした。1%リスク（$40）
+では2Rでも$80のはずが、整数株への切り捨てで実際の平均利益が$30程度まで潰れていたためです。
+`--risk-pct 1.7 --fractional` に変えたところ 43.4% になりました。**$4,000 の口座では端株対応の
+有無が結果を左右します。**
+
 ## 出力ファイル（バックテスト）
 
-`--out-dir`（デフォルト `data/backtest`）配下に以下が生成されます。
+`--out-dir`（デフォルト `data/backtest`）配下に以下が生成されます。ファイル名にはモード
+（`swing` / `intraday`）が含まれます。
 
-- **`data/backtest/summary.csv`** — 銘柄×戦略ごとの IS/OOS 全指標、`baseline_expectancy_jpy`、
-  `degradation` をまとめたもの。OOS expectancy の降順でソートされます。
-- **`data/backtest/<SYMBOL>-<strategy>-oos-trades.csv`** — out-of-sample の全取引（entry/exit
-  の時刻・価格、株数、`pnl_usd`、`pnl_jpy`、`exit_reason`）。
-- **`data/backtest/<SYMBOL>-<strategy>-windows.csv`** — window ごとの採用パラメータ、train/test
-  の expectancy、baseline。
+- **`data/backtest/summary.csv`** — 銘柄×戦略×モードごとの IS/OOS 全指標、
+  `baseline_expectancy_jpy`、`degradation` をまとめたもの。OOS expectancy の降順でソートされま
+  す。
+- **`data/backtest/<SYMBOL>-<mode>-<strategy>-oos-trades.csv`** — out-of-sample の全取引
+  （entry/exit の時刻・価格、株数、`pnl_usd`、`pnl_jpy`、`exit_reason`）。
+- **`data/backtest/<SYMBOL>-<mode>-<strategy>-windows.csv`** — window ごとの採用パラメータ、
+  train/test の expectancy、baseline。
 
 主な指標（`stats.py` の `Summary`）: `n_trades`, `n_days`, `win_rate`, `total_pnl_jpy`,
 `expectancy_jpy`, `avg_win_jpy`, `avg_loss_jpy`, `profit_factor`, `max_drawdown_jpy`,
-`median_daily_pnl_jpy`, `pct_days_at_target`, `sharpe`, `stopped_out_pct`, `hit_target_pct`,
-`timed_out_pct`。
+`median_daily_pnl_jpy`, `pct_days_at_target`, `pct_trades_at_target`, `avg_hold_days`, `sharpe`,
+`t_stat`, `stopped_out_pct`, `hit_target_pct`, `timed_out_pct`。
 
-このうち `pct_days_at_target` が headline です。「1日+5,000円に届いた日は何%か」という問いに直
-接答える数値だからです。`stats.py` はこう注意しています。合計利益が大きくても、1回の大勝ちが全
-体を担いでいれば「毎日目標を稼ぐ」こととは別の話です。
+`pct_trades_at_target` は swing モードの主要指標です。「1取引+10,000円に届いた取引の割合」とい
+う問いに直接答える数値だからです。`pct_days_at_target` は intraday 用で、「1日+5,000円に届いた
+日は何%か」に答えます。`stats.py` はこう注意しています。合計利益が大きくても、1回の大勝ちが全
+体を担いでいれば「毎回・毎日目標を稼ぐ」こととは別の話です。
 
 ## データソース
 
@@ -357,18 +430,25 @@ USD/JPY レートは `--fx-rate` で明示しない限り、yfinance（`JPY=X`�
 
 ## 資金と目標について
 
-同じ「1日 +5,000円」という目標でも、資金額によって難易度はまったく違います。
+いまの目標は「2〜7日のスイングで1取引あたり +10,000円」です。資金 $4,000、USD/JPY 150円換算
+では次のようになります。
 
-| 資金 | 日次リターン | 年率(250日) | 必要な値幅率(30%捕捉) |
-| --- | --- | --- | --- |
-| $4,000 (60万円) | 0.833% | 208% | 2.78% |
-| $10,000 (150万円) | 0.333% | 83% | 1.11% |
-| $20,000 (300万円) | 0.167% | 42% | 0.56% |
-| $25,000 (375万円) | 0.133% | 33% | 0.44% |
+- 10,000 JPY = $66.67 = 口座の **1.67%/取引**
+- 2R の勝ちトレードで届かせるには **0.83%/取引** のリスクが必要（1R = $33.33）
+- 平均5日保有で市場に居続けると、年間およそ **50取引**（250営業日 ÷ 5日）
 
-目標額はどの行も同じ「1日 +5,000円」ですが、必要な日次リターンは資金額に応じて約6倍の差があり
-ます。年率208%を継続できる個人トレーダーはまず存在しません。一方、年率42%は困難ではあるものの、
-実在する水準です。
+同じ「1取引 +10,000円」という目標でも、資金額によって難易度は変わります。
+
+| 資金 | 1取引の目標(%) | 2Rで必要なリスク率/取引 | 年間取引数(目安) | 年率換算(目安) |
+| --- | --- | --- | --- | --- |
+| $4,000 (60万円) | 1.67% | 0.83% | 50 | 83% |
+| $10,000 (150万円) | 0.67% | 0.33% | 50 | 33% |
+| $20,000 (300万円) | 0.33% | 0.17% | 50 | 17% |
+| $25,000 (375万円) | 0.27% | 0.13% | 50 | 13% |
+
+デイトレで1日+5,000円（年率208%）に比べ、スイングで1取引+10,000円は現実的な水準に下りていま
+す。ただし勝率と期待値次第であり、目標額そのものが達成を保証するわけではありません。年間取引
+数（50取引）は平均保有5日を前提にした目安であり、実際の頻度は戦略のシグナル発生率に依存します。
 
 なお、この表も `metrics_all.csv` の判定も `capture_rate = 0.30`（値幅の30%を実際に回収できる）
 という前提に立っています。この前提自体が既に楽観的で、`--capture-rate 0.15` あたりで見直すのが
@@ -396,8 +476,14 @@ margin standard に置き換わりました。出典は FINRA Regulatory Notice 
 ./.venv/bin/python -m pytest tests/ -q
 ```
 
-`tests/test_screener.py` と `tests/test_backtest.py` に合わせて50個のテストがあり、いずれも合成
-データのみを使ったオフラインテストです。ネットワークアクセスも API キーも不要です。
+`tests/test_screener.py`・`tests/test_backtest.py`・`tests/test_swing.py` に合わせて74個のテス
+トがあり、いずれも合成データのみを使ったオフラインテストです。ネットワークアクセスも API キー
+も不要です。
+
+テストは実際にバグを検出しています。`rsi()` が上昇継続で損失ゼロになる区間でクラッシュする不具
+合をテストが捕捉し修正しました。
+
+日足キャッシュが取得済みの期間を記録していなかった不具合も同様に修正しています。`--history-days 730` で取得した後に `--history-days 7300` を指定しても、12時間以内なら短いキャッシュがそのまま使われていました。現在は `data/cache/_coverage.json` に取得開始日を記録し、要求された範囲を満たさないキャッシュはミス扱いにします。
 
 ## 制約
 

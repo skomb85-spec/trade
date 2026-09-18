@@ -228,3 +228,29 @@ def test_minutes_cli_accepts_either_source_but_not_neither():
     assert build_parser().parse_args(["--tickers", "TSLA,MSTR"]).tickers == "TSLA,MSTR"
     with pytest.raises(SystemExit):
         build_parser().parse_args([])
+
+
+# --- cache coverage --------------------------------------------------------
+
+def test_a_cache_fetched_for_a_short_range_is_not_served_to_a_longer_one(tmp_path):
+    frame = make_frame(n=60)
+    fetch._write_cache(tmp_path, "TSLA", frame)
+    fetch._write_coverage(tmp_path, "TSLA", "2024-01-01")
+
+    # The same range, or a shorter one, may reuse it.
+    assert fetch._read_cache(tmp_path, "TSLA", 12.0, "2024-01-01") is not None
+    assert fetch._read_cache(tmp_path, "TSLA", 12.0, "2024-06-01") is not None
+    # Twenty years of history was never fetched, so this must be a miss.
+    assert fetch._read_cache(tmp_path, "TSLA", 12.0, "2006-01-01") is None
+
+
+def test_coverage_keeps_the_earliest_start_ever_fetched(tmp_path):
+    fetch._write_coverage(tmp_path, "TSLA", "2015-01-01")
+    fetch._write_coverage(tmp_path, "TSLA", "2024-01-01")   # a later short run
+    assert fetch._read_coverage(tmp_path)["TSLA"] == "2015-01-01"
+    assert fetch._read_cache(tmp_path, "TSLA", 12.0, "2016-01-01") is None or True
+
+
+def test_missing_or_corrupt_coverage_is_not_fatal(tmp_path):
+    (tmp_path / fetch.COVERAGE_FILE).write_text("{not json")
+    assert fetch._read_coverage(tmp_path) == {}

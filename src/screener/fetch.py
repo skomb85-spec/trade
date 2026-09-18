@@ -12,6 +12,7 @@ split- and dividend-adjusted history would understate older bars.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ log = logging.getLogger(__name__)
 
 OHLCV_COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
 STOOQ_CSV_URL = "https://stooq.com/q/d/l/?s={symbol}&i=d"
+COVERAGE_FILE = "_coverage.json"
 
 
 @dataclass
@@ -60,12 +62,54 @@ def _cache_path(cache_dir: Path, ticker: str) -> Path:
     return cache_dir / f"{safe}.csv"
 
 
-def _read_cache(cache_dir: Path | None, ticker: str, max_age_hours: float) -> pd.DataFrame | None:
+def _read_coverage(cache_dir: Path | None) -> dict[str, str]:
+    """Earliest date each cached ticker was actually *asked* for.
+
+    Without this a cache filled by a 730-day run is served to a later run
+    asking for twenty years: the file is fresh and parses fine, it just
+    silently holds a fraction of the history. The requested start is the
+    only way to tell that apart from a ticker that simply has no older
+    data, which is a legitimate short cache.
+    """
+    if cache_dir is None:
+        return {}
+    path = cache_dir / COVERAGE_FILE
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_coverage(cache_dir: Path | None, ticker: str, start: str) -> None:
+    if cache_dir is None:
+        return
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    coverage = _read_coverage(cache_dir)
+    previous = coverage.get(ticker)
+    # Keep the earliest start ever fetched; a later short run must not
+    # shrink what the cache claims to cover.
+    if previous is None or str(start) < previous:
+        coverage[ticker] = str(start)
+    try:
+        (cache_dir / COVERAGE_FILE).write_text(json.dumps(coverage, indent=0, sort_keys=True))
+    except OSError as exc:
+        log.debug("could not update cache coverage: %s", exc)
+
+
+def _read_cache(cache_dir: Path | None, ticker: str, max_age_hours: float,
+                start: str | None = None, coverage: dict[str, str] | None = None
+                ) -> pd.DataFrame | None:
     if cache_dir is None:
         return None
     path = _cache_path(cache_dir, ticker)
     if not path.exists():
         return None
+    if start is not None:
+        covered = (coverage if coverage is not None else _read_coverage(cache_dir)).get(ticker)
+        if covered is None or str(start) < covered:
+            return None
     age_hours = (time.time() - path.stat().st_mtime) / 3600
     if age_hours > max_age_hours:
         return None
@@ -153,9 +197,10 @@ def fetch_ohlcv(
     sources: dict[str, str] = {}
     failed: dict[str, str] = {}
 
+    coverage = _read_coverage(cache_dir)
     pending: list[str] = []
     for ticker in tickers:
-        cached = _read_cache(cache_dir, ticker, cache_max_age_hours)
+        cached = _read_cache(cache_dir, ticker, cache_max_age_hours, start, coverage)
         if cached is not None:
             frames[ticker] = cached.loc[str(start) : str(end)]
             sources[ticker] = "cache"
@@ -167,6 +212,7 @@ def fetch_ohlcv(
             frames[ticker] = frame
             sources[ticker] = "yfinance"
             _write_cache(cache_dir, ticker, frame)
+            _write_coverage(cache_dir, ticker, start)
 
     missing = [t for t in tickers if t not in frames or frames[t].empty]
     if missing and use_stooq_fallback:
@@ -177,6 +223,7 @@ def fetch_ohlcv(
                 frames[ticker] = frame
                 sources[ticker] = "stooq"
                 _write_cache(cache_dir, ticker, frame)
+                _write_coverage(cache_dir, ticker, start)
 
     for ticker in tickers:
         if ticker not in frames or frames[ticker].empty:
