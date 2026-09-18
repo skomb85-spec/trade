@@ -33,10 +33,16 @@ capital_usd × range_pct × capture_rate ≥ target_jpy / usdjpy
 ## インストール
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+git clone https://github.com/skomb85-spec/trade.git
+cd trade
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
 ```
+
+macOS には `python` コマンドがなく `python3` だけが入っています。以降のコマンドは仮想環境の
+インタプリタを `./.venv/bin/python` とパスで直接指定するため、`source .venv/bin/activate` は
+不要で、`python` / `python3` の違いも踏みません。コマンドはリポジトリのルート（`trade/`）で
+実行してください。`PYTHONPATH=src` はそこからの相対パスです。
 
 `requirements.txt` には日足スクリーニング本体に必要な `pandas` / `yfinance` / `requests` /
 `lxml` に加えて、分足データ取得（Alpaca）に使う `alpaca-py` と、分足データを parquet 形式で保存す
@@ -48,23 +54,30 @@ pip install -r requirements.txt
 基本のコマンドは次の形です（`src` レイアウトのため `PYTHONPATH=src` が必要です）。
 
 ```bash
-PYTHONPATH=src python -m screener
+PYTHONPATH=src ./.venv/bin/python -m screener
+```
+
+初回は小さく試してください。S&P500 の20年分は500銘柄分の取得になり、数十分かかるうえ
+Yahoo のレート制限に当たることがあります。
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m screener --limit 30 --history-days 7300
 ```
 
 実行例:
 
 ```bash
 # デフォルト（目標 5,000 JPY/日、資金 $4,000、capture 30%）
-PYTHONPATH=src python -m screener
+PYTHONPATH=src ./.venv/bin/python -m screener
 
 # 複数の資金額でどれだけ通過銘柄数が変わるかを比較する
-PYTHONPATH=src python -m screener --capital-sweep 4000,10000,20000,25000
+PYTHONPATH=src ./.venv/bin/python -m screener --capital-sweep 4000,10000,20000,25000
 
 # S&P 500 構成銘柄をスクリーニング
-PYTHONPATH=src python -m screener --universe sp500
+PYTHONPATH=src ./.venv/bin/python -m screener --universe sp500
 
 # 保守的に、capture_rate を下げて見直す
-PYTHONPATH=src python -m screener --capture-rate 0.15
+PYTHONPATH=src ./.venv/bin/python -m screener --capture-rate 0.15
 ```
 
 ## CLIオプション
@@ -179,7 +192,7 @@ NVDA や META は値幅率こそそれなりにありますが、この資金で
 ```bash
 export APCA_API_KEY_ID=...
 export APCA_API_SECRET_KEY=...
-PYTHONPATH=src python -m screener.minutes --from-passed data/out/passed.csv --years 5
+PYTHONPATH=src ./.venv/bin/python -m screener.minutes --from-passed data/out/passed.csv --years 5
 ```
 
 Alpaca の無料枠は IEX フィード経由で 2016 年まで（約10年分）の 1 分足データを提供しています。デ
@@ -251,9 +264,9 @@ swing がデフォルトになったのは、日足は履歴が桁違いに長�
 ### 使い方
 
 ```bash
-PYTHONPATH=src python -m screener.backtest --symbols TSLA,MSTR
-PYTHONPATH=src python -m screener.backtest --from-passed data/out/passed.csv --strategy donchian
-PYTHONPATH=src python -m screener.backtest --mode intraday --symbols TSLA
+PYTHONPATH=src ./.venv/bin/python -m screener.backtest --symbols TSLA,MSTR
+PYTHONPATH=src ./.venv/bin/python -m screener.backtest --from-passed data/out/passed.csv --strategy donchian
+PYTHONPATH=src ./.venv/bin/python -m screener.backtest --mode intraday --symbols TSLA
 ```
 
 ### 戦略（`swing_strategies.py`、`--mode swing`）
