@@ -207,6 +207,140 @@ Alpaca の無料枠は IEX フィード経由で 2016 年まで（約10年分）
 
 60日分の5分足でパターンを探すと過学習しやすいため、Alpacaの10年分を推奨します。
 
+## バックテストとwalk-forward検証
+
+固定した過去データでパラメータ探索をすれば、必ず何かが見つかります。48通り試せば、コイン投げ戦
+略でも「最良の1つ」は好成績に見えます。これは算術であって証拠ではありません。だからこのツールで
+は walk-forward が後付けの検証ではなく、設計の中心に置かれています。
+
+### 仕組み
+
+train 期間でパラメータを選び、その直後の test 期間だけで評価し、window を test の長さだけ前進さ
+せます。全 test 期間をつなぐと、どの取引も自分の結果を知らずに選ばれた out-of-sample の成績にな
+ります。
+
+これだけでは単一の OOS 数値をまだ誤読しかねないため、2つの診断が付いています（`walkforward.py`）。
+
+- `baseline_expectancy` — その window の**全**パラメータ組み合わせの OOS 平均。選んだパラメータ
+  がこれを上回らなければ、最適化は何も生んでいません。
+- パラメータ安定性 — window ごとに選ばれる値が毎回変わるなら、集計 OOS が黒字でもノイズを拾って
+  いるだけです。
+
+### シミュレーションの3つの誠実さのルール（`engine.py`）
+
+- バー i のシグナルは バー i+1 の始値で約定する（バー i の終値や、トリガー価格ちょうどでは約定
+  させない）
+- 1本のバーが stop と target の両方を含む場合、stop が先に当たったものとして扱う（分足はどちら
+  が先か記録していないため、自分に有利に解釈しない）
+- 全ポジションは引けでフラット。オーバーナイトは持たない
+
+### 使い方
+
+```bash
+PYTHONPATH=src python -m screener.backtest --symbols TSLA,MSTR --strategy all
+PYTHONPATH=src python -m screener.backtest --from-passed data/out/passed.csv --strategy orb
+```
+
+### 戦略（`strategies.py`）
+
+- `orb`（OpeningRangeBreakout） — 寄り付きN分のレンジのブレイクに乗る。params: or_minutes,
+  target_r, direction。48通り
+- `vwap`（VWAPReversion） — VWAPからの乖離を逆張りし、VWAPへの回帰を狙う。params: threshold_pct,
+  stop_pct, start_minute。60通り
+- `gap`（GapFill） — 寄り付きのギャップを前日終値方向に狙う。params: min_gap_pct, max_gap_pct,
+  stop_pct, entry_minute。81通り
+
+### CLIオプション（`src/screener/backtest/cli.py`）
+
+| フラグ | デフォルト | 説明 |
+| --- | --- | --- |
+| `--symbols` | （`--from-passed` と排他・必須） | カンマ区切りのティッカー、例: `TSLA,MSTR` |
+| `--from-passed` | （`--symbols` と排他・必須） | screen の `passed.csv` へのパス |
+| `--strategy` | `all` | 戦略名（`orb` / `vwap` / `gap`）または `all` |
+| `--data-dir` | `data/minute` | 分足データのディレクトリ |
+| `--bar-minutes` | `5` | テスト前に1分足をこのバー幅に集約する |
+
+account and risk（資金とリスク）:
+
+| フラグ | デフォルト | 説明 |
+| --- | --- | --- |
+| `--capital-usd` | `4000.0` | 口座の資金額（USD） |
+| `--risk-pct` | `1.0` | 1トレードあたりリスクにさらす資金の割合（%） |
+| `--fractional` | `False`（フラグ） | 端株（fractional shares）を許可する |
+| `--target-jpy` | `5000.0` | 「目標達成日」の判定に使う1日あたりの目標利益（円） |
+| `--fx-rate` | `None` | USD/JPY を固定する |
+
+costs（コスト）:
+
+| フラグ | デフォルト | 説明 |
+| --- | --- | --- |
+| `--slippage-bps` | `5.0` | 片道スリッページ（ベーシスポイント） |
+| `--commission-per-share` | `0.0` | 1株あたりの手数料 |
+
+walk-forward:
+
+| フラグ | デフォルト | 説明 |
+| --- | --- | --- |
+| `--train-sessions` | `250` | 訓練 window の取引日数（デフォルトは約1年） |
+| `--test-sessions` | `60` | out-of-sample window の取引日数 |
+| `--objective` | `expectancy` | 訓練 window が最大化する対象（`expectancy` / `total` /
+  `sharpe` / `profit_factor` から選択） |
+| `--min-train-trades` | `20` | 訓練取引数がこれ未満のパラメータ組み合わせは無視する |
+| `--no-baseline` | `False`（フラグ） | 全組み合わせの out-of-sample baseline 計算を省略する（高速化） |
+
+| フラグ | デフォルト | 説明 |
+| --- | --- | --- |
+| `--out-dir` | `data/backtest` | 出力ディレクトリ |
+| `-v`, `--verbose` | `False`（フラグ） | デバッグログを出力する |
+
+### コストモデル（`costs.py`）
+
+米国株は手数料無料のブローカーが多いため、成否を決めるのは slippage です。デフォルトは片道 5
+bps で、意図的に甘くしていません。`--slippage-bps` で変更可能です。
+
+### ポジションサイジング（`engine.py` の `Sizer`）
+
+リスクベース（`--risk-pct`、デフォルト1%、ストップまでの距離で株数を決める）と、資金による上限
+の小さい方を採用します。
+
+## フレームワークの検証結果
+
+これは合成データによる**フレームワーク自体の検証**であり、実市場の成績ではありません。
+
+walk-forward の枠組みが正しく機能するかを、答えが構成上わかっている合成データを使って**両方向
+で**検証しました。片方はエッジを持たない純粋なランダムウォーク、もう片方は人工的に本物のORBエッ
+ジを埋め込んだ系列です。
+
+| 銘柄 | 構造 | In-sample | Out-of-sample | 判定 |
+|---|---|---|---|---|
+| RANDOM | エッジ無し（ランダムウォーク） | 目標達成日 29.2%、Sharpe 0.54 | -118 JPY/取引、合計 -36,242 JPY | does NOT work |
+| TRENDY | エッジ有り（ORBドリフトを埋込） | +6,687 JPY/取引 | +6,964 JPY/取引、目標達成日 63.0% | positive |
+
+**RANDOM の行が重要**です。エッジが存在しないデータでも、最適化は in-sample で Sharpe 0.54・目
+標達成日29.2% という「それらしい」結果を見つけてしまいました。walk-forward がそれを out-of-
+sample で -118 JPY/取引として正しく棄却しています。この検証がなければ「勝ちパターンを発見した」
+と誤認するところでした。
+
+## 出力ファイル（バックテスト）
+
+`--out-dir`（デフォルト `data/backtest`）配下に以下が生成されます。
+
+- **`data/backtest/summary.csv`** — 銘柄×戦略ごとの IS/OOS 全指標、`baseline_expectancy_jpy`、
+  `degradation` をまとめたもの。OOS expectancy の降順でソートされます。
+- **`data/backtest/<SYMBOL>-<strategy>-oos-trades.csv`** — out-of-sample の全取引（entry/exit
+  の時刻・価格、株数、`pnl_usd`、`pnl_jpy`、`exit_reason`）。
+- **`data/backtest/<SYMBOL>-<strategy>-windows.csv`** — window ごとの採用パラメータ、train/test
+  の expectancy、baseline。
+
+主な指標（`stats.py` の `Summary`）: `n_trades`, `n_days`, `win_rate`, `total_pnl_jpy`,
+`expectancy_jpy`, `avg_win_jpy`, `avg_loss_jpy`, `profit_factor`, `max_drawdown_jpy`,
+`median_daily_pnl_jpy`, `pct_days_at_target`, `sharpe`, `stopped_out_pct`, `hit_target_pct`,
+`timed_out_pct`。
+
+このうち `pct_days_at_target` が headline です。「1日+5,000円に届いた日は何%か」という問いに直
+接答える数値だからです。`stats.py` はこう注意しています。合計利益が大きくても、1回の大勝ちが全
+体を担いでいれば「毎日目標を稼ぐ」こととは別の話です。
+
 ## データソース
 
 株価データの取得は `yfinance` を第一候補とし、失敗した銘柄は Stooq
@@ -262,8 +396,8 @@ margin standard に置き換わりました。出典は FINRA Regulatory Notice 
 ./.venv/bin/python -m pytest tests/ -q
 ```
 
-`tests/test_screener.py` に23個のテストがあり、いずれも合成データのみを使ったオフラインテストで
-す。ネットワークアクセスも API キーも不要です。
+`tests/test_screener.py` と `tests/test_backtest.py` に合わせて50個のテストがあり、いずれも合成
+データのみを使ったオフラインテストです。ネットワークアクセスも API キーも不要です。
 
 ## 制約
 
@@ -271,7 +405,7 @@ margin standard に置き換わりました。出典は FINRA Regulatory Notice 
   タ取得は `data.alpaca.markets` への外向きのネットワークアクセスを必要とします。サンドボックス
   環境やプロキシ制限のある環境ではこれらへの通信がブロックされる場合があり、その場合は実行して
   もデータが取得できずに終了します。
-- このツールはスクリーニングとデータ収集のみを行い、売買は一切実行しません。バックテストや戦略
-  の検証機能もまだ含まれていません。
+- 売買は一切実行しない（スクリーニング、データ収集、バックテストのみ）。また、バックテストは実
+  市場データでは未実行で、検証は合成データによるフレームワークの動作確認にとどまる。
 </content>
 </invoke>
