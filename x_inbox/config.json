@@ -1,0 +1,19 @@
+{
+  "spreadsheet_id": "PUT_YOUR_SPREADSHEET_ID_HERE",
+  "worksheet": "inbox",
+  "key_column": "id",
+  "columns": [
+    "collected_at",
+    "posted_at",
+    "id",
+    "author",
+    "text",
+    "url",
+    "likes",
+    "reposts",
+    "tags",
+    "note"
+  ],
+  "inbox_dir": "x_inbox",
+  "archive_dir": "x_inbox/archive"
+}

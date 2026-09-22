@@ -1,0 +1,80 @@
+# x_inbox/ に置かれたCSVを、既存のGoogleスプレッドシートに追記する。
+#
+# 動く条件はふたつだけ:
+#   - Secrets に GOOGLE_SERVICE_ACCOUNT_JSON（サービスアカウントのJSONキー）
+#   - 対象シートを、そのサービスアカウントのメールアドレスに「編集者」で共有
+# 詳しい手順は x_inbox/README.md を読んでください。
+name: x-inbox to Google Sheet
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'x_inbox/*.csv'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'シートに書かず、追記される内容だけ確認する'
+        type: boolean
+        default: false
+      check:
+        description: '接続テストだけ行う（何も追記しない）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# 同時に走らせない。並行追記は重複のもと。
+concurrency:
+  group: x-inbox-append
+  cancel-in-progress: false
+
+jobs:
+  append:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r x_inbox/requirements.txt
+
+      - name: Append to the sheet
+        id: append
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ vars.SPREADSHEET_ID || secrets.SPREADSHEET_ID }}
+          WORKSHEET: ${{ vars.WORKSHEET }}
+          PYTHONPATH: src
+        run: |
+          if [ "${{ inputs.check }}" = "true" ]; then
+            python -m x_inbox --check
+          elif [ "${{ inputs.dry_run }}" = "true" ]; then
+            python -m x_inbox --dry-run
+          else
+            python -m x_inbox
+          fi
+
+      # 追記が終わったCSVは x_inbox/archive/<日付>/ に移してコミットする。
+      # [skip ci] を付けるのは、このコミットでワークフローが再起動しないように。
+      - name: Commit the archived CSVs
+        if: steps.append.outputs.archived == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A x_inbox
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+            exit 0
+          fi
+          git commit -m "Archive x_inbox CSVs appended to the sheet [skip ci]"
+          for i in 1 2 3 4; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            sleep $((2 ** i))
+          done
+          echo "push failed after retries" >&2
+          exit 1

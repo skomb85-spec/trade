@@ -483,15 +483,37 @@ margin standard に置き換わりました。出典は FINRA Regulatory Notice 
 また、現金口座（cash account）はもともと PDT の対象外でしたが、T+1 の受渡し規則は引き続き適用さ
 れます。
 
+## Xの抽出データをスプレッドシートに追記する（x_inbox）
+
+スクリーニングとは独立した補助ツールです。`x_inbox/` に置かれたCSVを、GitHub Actions が既存の
+Googleスプレッドシートの末尾に追記します。Grokなどの外部ツールがCSVをpushするだけで、シートが
+更新される、という使い方を想定しています。
+
+- **Xのトークンは不要**です。必要なのはGoogleのサービスアカウント1つだけです。
+- 同じ行を2回pushしても二重には入りません（`id` 列、無ければ行の内容のハッシュで判定）。
+- 列の順番はシートの1行目に合わせます。CSVの列順は問いません。
+- 追記済みのCSVは `x_inbox/archive/<日付>/` に移動され、コミットとして残ります。
+
+```bash
+# 何が追記されるかだけ見る（Googleには接続しない）
+PYTHONPATH=src ./.venv/bin/python -m x_inbox --dry-run
+
+# 接続テストだけ行う
+PYTHONPATH=src ./.venv/bin/python -m x_inbox --check
+```
+
+セットアップ手順（サービスアカウントの作り方、シートの共有、GitHubへの登録）は
+[`x_inbox/README.md`](x_inbox/README.md) にまとめてあります。
+
 ## テスト
 
 ```bash
 ./.venv/bin/python -m pytest tests/ -q
 ```
 
-`tests/test_screener.py`・`tests/test_backtest.py`・`tests/test_swing.py` に合わせて74個のテス
-トがあり、いずれも合成データのみを使ったオフラインテストです。ネットワークアクセスも API キー
-も不要です。
+`tests/test_screener.py`・`tests/test_backtest.py`・`tests/test_swing.py`・
+`tests/test_x_inbox.py` に合わせて107個のテストがあり、いずれも合成データのみを使ったオフライ
+ンテストです。ネットワークアクセスも API キーも不要です。
 
 テストは実際にバグを検出しています。`rsi()` が上昇継続で損失ゼロになる区間でクラッシュする不具
 合をテストが捕捉し修正しました。

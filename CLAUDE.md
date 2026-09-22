@@ -24,7 +24,7 @@ is relative to it.
 ```bash
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
-PYTHONPATH=src ./.venv/bin/python -m pytest tests/ -q     # 74 tests, offline
+PYTHONPATH=src ./.venv/bin/python -m pytest tests/ -q     # 107 tests, offline
 ```
 
 ## Entry points
@@ -40,6 +40,16 @@ PYTHONPATH=src ./.venv/bin/python -m screener.backtest \
 # Minute bars from Alpaca, only needed for --mode intraday
 export APCA_API_KEY_ID=... APCA_API_SECRET_KEY=...
 PYTHONPATH=src ./.venv/bin/python -m screener.minutes --from-passed data/out/passed.csv --years 5
+```
+
+`src/x_inbox/` is a separate tool that has nothing to do with trading: it
+appends CSVs dropped into `x_inbox/` to an existing Google Sheet, driven by
+`.github/workflows/x-inbox-append.yml`. It needs a Google service account
+(secret `GOOGLE_SERVICE_ACCOUNT_JSON`) and no X/Twitter credentials.
+`--dry-run` and `--check` never write. Setup lives in `x_inbox/README.md`.
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m x_inbox --dry-run
 ```
 
 ## Invariants — do not break these
@@ -87,7 +97,8 @@ before believing the result.
 ## State
 
 Done: screening, daily and minute data collection, swing and intraday
-backtesting, walk-forward with significance testing. 74 offline tests pass.
+backtesting, walk-forward with significance testing, and the `x_inbox`
+CSV-to-Google-Sheet appender. 107 offline tests pass.
 
 Not done: **no run against live market data has ever happened.** Everything
 so far was verified on synthetic data. The immediate next step is the real

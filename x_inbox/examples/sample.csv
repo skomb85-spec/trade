@@ -1,0 +1,3 @@
+collected_at,posted_at,id,author,text,url,likes,reposts,tags,note
+2026-09-22T09:00:00Z,2026-09-21T14:32:00Z,1839200000000000001,@example_trader,"NVDA broke out of a 3-week range on volume.",https://x.com/example_trader/status/1839200000000000001,412,88,breakout;NVDA,
+2026-09-22T09:00:00Z,2026-09-21T15:10:00Z,1839200000000000002,@another_one,"CPI came in soft; small caps bid.",https://x.com/another_one/status/1839200000000000002,95,12,macro,手動メモはこの列に
