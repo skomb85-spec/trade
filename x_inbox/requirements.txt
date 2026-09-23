@@ -1,0 +1,3 @@
+# Only the GitHub Actions job needs these. The screener's own venv does not.
+gspread>=6.0
+google-auth>=2.28
