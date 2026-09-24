@@ -1,0 +1,2 @@
+collected_at,handle,display_name,ticker,company,post_created_at,post_text,source_url,topic,stance,summary
+2026-09-24 11:20:00 JST,_pipeline_test,パイプライン疎通テスト(削除可),0000,テスト,2026-09-24 11:19:00 JST,これは追記経路の動作確認用の1行です。,https://example.com/japan-thesis-pipeline-test,test,neutral,動作確認用
