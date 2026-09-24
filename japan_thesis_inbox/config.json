@@ -1,0 +1,20 @@
+{
+  "spreadsheet_id": "1c8V_2ZVXQn5ed2DreL6R77w8khYFGWVjXJLEO6xxiIU",
+  "worksheet": "投稿データ",
+  "key_column": "source_url+ticker",
+  "columns": [
+    "collected_at",
+    "handle",
+    "display_name",
+    "ticker",
+    "company",
+    "post_created_at",
+    "post_text",
+    "source_url",
+    "topic",
+    "stance",
+    "summary"
+  ],
+  "inbox_dir": "japan_thesis_inbox",
+  "archive_dir": "japan_thesis_inbox/archive"
+}

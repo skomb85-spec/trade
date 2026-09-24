@@ -228,6 +228,25 @@ def test_running_twice_does_not_duplicate(tmp_path):
     assert sheet.header_writes == []               # header was already there
 
 
+def test_composite_key_treats_same_url_with_another_ticker_as_new(tmp_path):
+    columns = ["ticker", "source_url", "text"]
+    config = write_config(tmp_path, key_column="source_url+ticker", columns=columns)
+    sheet = FakeSheet([list(columns)])
+    write_csv(tmp_path, "a.csv", "ticker,source_url,text\n7203,https://x.com/1,a\n")
+    run(config, sheet)
+    write_csv(tmp_path, "b.csv",
+              "ticker,source_url,text\n7203,https://x.com/1,edited\n"
+              "6758,https://x.com/1,b\n")
+    run(config, sheet)
+    assert [r[0] for r in sheet.values[1:]] == ["7203", "6758"]
+
+
+def test_composite_key_must_name_existing_columns(tmp_path):
+    config = write_config(tmp_path, key_column="source_url+nope")
+    with pytest.raises(core.ConfigError):
+        core.load_config(config)
+
+
 def test_processed_files_are_archived(tmp_path):
     config = write_config(tmp_path)
     write_csv(tmp_path, "day1.csv", "id,text\n1,hi\n")

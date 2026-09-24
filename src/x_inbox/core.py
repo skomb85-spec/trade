@@ -63,10 +63,11 @@ def load_config(path: Path | str) -> Config:
         raise ConfigError(f'{path} の "columns" が空です。シートの列名を並べてください。')
 
     key_column = str(raw.get("key_column", "")).strip()
-    if key_column and key_column not in columns:
-        raise ConfigError(
-            f'{path}: "key_column" に {key_column!r} とありますが "columns" に同じ名前がありません。'
-        )
+    for part in _key_parts(key_column):
+        if part not in columns:
+            raise ConfigError(
+                f'{path}: "key_column" に {part!r} とありますが "columns" に同じ名前がありません。'
+            )
 
     return Config(
         spreadsheet_id=str(raw.get("spreadsheet_id", "")).strip(),
@@ -157,18 +158,26 @@ def _fit(values: Sequence[str], width: int) -> list[str]:
     return out
 
 
+def _key_parts(key_column: str) -> list[str]:
+    """``"a+b"`` means the pair (a, b) is the key; a plain name is a single column."""
+    return [p.strip() for p in key_column.split("+") if p.strip()]
+
+
 def row_key(values: Sequence[str], header: Sequence[str], key_column: str) -> str:
-    """Identity of a row: the key column when it is filled, else its content.
+    """Identity of a row: the key column(s) when filled, else its content.
+
+    ``key_column`` may join several columns with ``+`` (e.g. ``source_url+ticker``).
 
     Falling back to a hash of the whole row means a CSV without ids still
     dedupes -- re-running the job never appends the same line twice.
     """
     header = list(header)
     fitted = _fit(values, len(header))
-    if key_column and key_column in header:
-        value = fitted[header.index(key_column)]
-        if value:
-            return value
+    parts = _key_parts(key_column)
+    if parts and all(p in header for p in parts):
+        cells = [fitted[header.index(p)] for p in parts]
+        if any(cells):
+            return cells[0] if len(cells) == 1 else "\x1f".join(cells)
     digest = hashlib.sha1("\x1f".join(fitted).encode("utf-8")).hexdigest()
     return "sha1:" + digest
 

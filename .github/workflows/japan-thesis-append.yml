@@ -1,0 +1,71 @@
+# japan_thesis_inbox/ のCSVを、Japan Thesis Radar のスプレッドシートへ追記する。
+# x_inbox と同じコードを --config だけ変えて使う。詳細は japan_thesis_inbox/README.md。
+name: japan-thesis-inbox to Google Sheet
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'japan_thesis_inbox/*.csv'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'シートに書かず、追記される内容だけ確認する'
+        type: boolean
+        default: false
+      check:
+        description: '接続テストだけ行う（何も追記しない）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: japan-thesis-append
+  cancel-in-progress: false
+
+jobs:
+  append:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r x_inbox/requirements.txt
+
+      - name: Append to the sheet
+        id: append
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          PYTHONPATH: src
+        run: |
+          if [ "${{ inputs.check }}" = "true" ]; then
+            python -m x_inbox --config japan_thesis_inbox/config.json --check
+          elif [ "${{ inputs.dry_run }}" = "true" ]; then
+            python -m x_inbox --config japan_thesis_inbox/config.json --dry-run
+          else
+            python -m x_inbox --config japan_thesis_inbox/config.json
+          fi
+
+      - name: Commit the archived CSVs
+        if: steps.append.outputs.archived == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A japan_thesis_inbox
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+            exit 0
+          fi
+          git commit -m "Archive japan_thesis_inbox CSVs appended to the sheet [skip ci]"
+          for i in 1 2 3 4; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            sleep $((2 ** i))
+          done
+          echo "push failed after retries" >&2
+          exit 1
