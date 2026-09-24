@@ -15,6 +15,7 @@ import datetime as dt
 import hashlib
 import json
 import shutil
+import unicodedata
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -25,6 +26,10 @@ PLACEHOLDER_SHEET_ID = "PUT_YOUR_SPREADSHEET_ID_HERE"
 
 class ConfigError(Exception):
     """The config file is missing, malformed, or still has a placeholder."""
+
+
+class StructureError(Exception):
+    """The sheet or the CSV does not have the structure the config expects."""
 
 
 class CredentialsError(Exception):
@@ -39,6 +44,8 @@ class Config:
     columns: tuple[str, ...]
     inbox_dir: Path
     archive_dir: Path
+    normalize_key: bool = False
+    strict: bool = False
 
 
 def load_config(path: Path | str) -> Config:
@@ -76,6 +83,8 @@ def load_config(path: Path | str) -> Config:
         columns=columns,
         inbox_dir=Path(str(raw.get("inbox_dir", "x_inbox"))),
         archive_dir=Path(str(raw.get("archive_dir", "x_inbox/archive"))),
+        normalize_key=bool(raw.get("normalize_key", False)),
+        strict=bool(raw.get("strict", False)),
     )
 
 
@@ -163,7 +172,13 @@ def _key_parts(key_column: str) -> list[str]:
     return [p.strip() for p in key_column.split("+") if p.strip()]
 
 
-def row_key(values: Sequence[str], header: Sequence[str], key_column: str) -> str:
+def normalize_text(value: str) -> str:
+    """Width/case/whitespace-insensitive form used for keys when ``normalize_key`` is on."""
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+def row_key(values: Sequence[str], header: Sequence[str], key_column: str,
+            normalize: bool = False) -> str:
     """Identity of a row: the key column(s) when filled, else its content.
 
     ``key_column`` may join several columns with ``+`` (e.g. ``source_url+ticker``).
@@ -176,6 +191,8 @@ def row_key(values: Sequence[str], header: Sequence[str], key_column: str) -> st
     parts = _key_parts(key_column)
     if parts and all(p in header for p in parts):
         cells = [fitted[header.index(p)] for p in parts]
+        if normalize:
+            cells = [normalize_text(c) for c in cells]
         if any(cells):
             return cells[0] if len(cells) == 1 else "\x1f".join(cells)
     digest = hashlib.sha1("\x1f".join(fitted).encode("utf-8")).hexdigest()
@@ -183,9 +200,9 @@ def row_key(values: Sequence[str], header: Sequence[str], key_column: str) -> st
 
 
 def existing_keys(values: Sequence[Sequence[str]], header: Sequence[str],
-                  key_column: str) -> set[str]:
+                  key_column: str, normalize: bool = False) -> set[str]:
     """Keys already in the sheet. ``values`` is the sheet including its header."""
-    return {row_key(row, header, key_column) for row in list(values)[1:]
+    return {row_key(row, header, key_column, normalize) for row in list(values)[1:]
             if any(_clean(v) for v in row)}
 
 
@@ -205,6 +222,37 @@ def resolve_header(sheet_values: Sequence[Sequence[str]],
     return list(columns), True
 
 
+def structure_problems(sheet_header: Sequence[str], columns: Sequence[str],
+                       csv_columns: Iterable[str], key_column: str,
+                       sheet_is_empty: bool = False) -> list[str]:
+    """What is wrong with the sheet/CSV shape, phrased for a human. Empty list = fine."""
+    problems: list[str] = []
+    header, expected = list(sheet_header), list(columns)
+    if sheet_is_empty:
+        problems.append("シートに列見出し（1行目）がありません。")
+    elif header != expected:
+        missing = [c for c in expected if c not in header]
+        extra = [c for c in header if c not in expected]
+        detail = []
+        if missing:
+            detail.append("シートに無い列: " + ", ".join(missing))
+        if extra:
+            detail.append("config.jsonに無い列: " + ", ".join(extra))
+        if not detail:
+            detail.append("列の順番が違います")
+        problems.append("シートの列見出しがconfig.jsonの columns と一致しません（"
+                        + " / ".join(detail) + "）。")
+    csv_cols = set(csv_columns)
+    if csv_cols:
+        unknown = sorted(c for c in csv_cols if c not in header)
+        if unknown:
+            problems.append("CSVにあるがシートにない列: " + ", ".join(unknown))
+        absent = [p for p in _key_parts(key_column) if p not in csv_cols]
+        if absent:
+            problems.append("重複判定に使う列がCSVにありません: " + ", ".join(absent))
+    return problems
+
+
 @dataclass(frozen=True)
 class AppendPlan:
     header: tuple[str, ...]
@@ -221,7 +269,8 @@ class AppendPlan:
 
 
 def plan_append(records: Iterable[dict[str, str]], header: Sequence[str],
-                key_column: str, known_keys: Iterable[str] = ()) -> AppendPlan:
+                key_column: str, known_keys: Iterable[str] = (),
+                normalize: bool = False) -> AppendPlan:
     """Turn CSV records into sheet rows, dropping anything already there."""
     header = list(header)
     seen = set(known_keys)
@@ -238,7 +287,7 @@ def plan_append(records: Iterable[dict[str, str]], header: Sequence[str],
         if not any(values):
             empty += 1
             continue
-        key = row_key(values, header, key_column)
+        key = row_key(values, header, key_column, normalize)
         if key in seen:
             duplicates += 1
             continue

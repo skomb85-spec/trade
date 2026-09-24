@@ -1,0 +1,12 @@
+{
+  "spreadsheet_id": "1K771dkJLqXsl5qr7iwmBndMrU104OR_9v9RA_pIlAMI",
+  "worksheet": "TREND_SIGNAL",
+  "key_column": "",
+  "columns": [
+    "PLACEHOLDER"
+  ],
+  "strict": true,
+  "normalize_key": true,
+  "inbox_dir": "trend_signal_inbox",
+  "archive_dir": "trend_signal_inbox/archive"
+}

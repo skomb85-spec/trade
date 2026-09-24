@@ -247,6 +247,85 @@ def test_composite_key_must_name_existing_columns(tmp_path):
         core.load_config(config)
 
 
+def test_blank_ticker_still_dedupes_on_url(tmp_path):
+    columns = ["ticker", "source_url", "text"]
+    config = write_config(tmp_path, key_column="source_url+ticker", columns=columns)
+    sheet = FakeSheet([list(columns)])
+    for name in ("a.csv", "b.csv"):
+        write_csv(tmp_path, name, "ticker,source_url,text\n,https://x.com/9,hi\n")
+        run(config, sheet)
+    assert len(sheet.values) == 2
+
+
+def test_normalized_key_ignores_width_case_and_spacing(tmp_path):
+    columns = ["signal_id", "元ネタ", "派生ワード", "発見日時"]
+    config = write_config(tmp_path, key_column="元ネタ+派生ワード", columns=columns,
+                          normalize_key=True)
+    sheet = FakeSheet([list(columns)])
+    write_csv(tmp_path, "a.csv", "signal_id,元ネタ,派生ワード,発見日時\n"
+                                 "S1,ChatGPT  Agent,ずらし構文,2026-09-24\n")
+    run(config, sheet)
+    write_csv(tmp_path, "b.csv", "signal_id,元ネタ,派生ワード,発見日時\n"
+                                 "S2,ＣｈａｔＧＰＴ agent,ずらし構文 ,2026-09-25\n"
+                                 "S3,ChatGPT agent,別ワード,2026-09-25\n")
+    run(config, sheet)
+    assert [r[0] for r in sheet.values[1:]] == ["S1", "S3"]
+
+
+def strict_config(tmp_path, **extra):
+    return write_config(tmp_path, strict=True, **extra)
+
+
+def test_strict_stops_on_unknown_csv_column_and_keeps_the_file(tmp_path, capsys):
+    config = strict_config(tmp_path)
+    sheet = FakeSheet([list(COLUMNS)])
+    write_csv(tmp_path, "a.csv", "id,text,surprise\n1,hi,x\n")
+    assert run(config, sheet) == 1
+    assert len(sheet.values) == 1
+    assert (tmp_path / "inbox" / "a.csv").exists()
+    assert "surprise" in capsys.readouterr().err
+
+
+def test_strict_stops_when_the_sheet_header_differs_from_config(tmp_path):
+    config = strict_config(tmp_path)
+    sheet = FakeSheet([["id", "text", "extra"]])
+    write_csv(tmp_path, "a.csv", "id,text\n1,hi\n")
+    assert run(config, sheet) == 1
+    assert len(sheet.values) == 1
+    assert (tmp_path / "inbox" / "a.csv").exists()
+
+
+def test_strict_stops_on_an_empty_sheet_instead_of_writing_a_header(tmp_path):
+    config = strict_config(tmp_path)
+    sheet = FakeSheet()
+    write_csv(tmp_path, "a.csv", "id,text\n1,hi\n")
+    assert run(config, sheet) == 1
+    assert sheet.values == [] and sheet.header_writes == []
+
+
+def test_strict_stops_when_the_key_column_is_missing_from_the_csv(tmp_path):
+    config = strict_config(tmp_path)
+    write_csv(tmp_path, "a.csv", "text\nhi\n")
+    assert run(config, FakeSheet([list(COLUMNS)])) == 1
+
+
+def test_strict_run_that_matches_appends_and_archives(tmp_path):
+    config = strict_config(tmp_path)
+    sheet = FakeSheet([list(COLUMNS)])
+    write_csv(tmp_path, "a.csv", "id,text\n1,hi\n")
+    assert run(config, sheet) == 0
+    assert len(sheet.values) == 2
+    assert not (tmp_path / "inbox" / "a.csv").exists()
+
+
+def test_check_prints_a_fingerprint_of_the_other_tabs(tmp_path, capsys):
+    config = strict_config(tmp_path)
+    sheet = FakeSheet([list(COLUMNS)])
+    sheet.other_tabs = lambda: [("README", 7, "abc123")]
+    assert run(config, sheet, "--check") == 0
+    assert "other tab: README rows=7 sha1=abc123" in capsys.readouterr().out
+
+
 def test_processed_files_are_archived(tmp_path):
     config = write_config(tmp_path)
     write_csv(tmp_path, "day1.csv", "id,text\n1,hi\n")
@@ -358,3 +437,50 @@ def test_missing_sheet_error_points_at_the_id():
 def test_unknown_errors_are_passed_through():
     from x_inbox.sheets import _explain
     assert "boom" in _explain(FakeAPIError(None), "writer@example.com", "sid")
+
+
+def _fake_gspread(monkeypatch, tabs):
+    import types
+    mod = types.ModuleType("gspread")
+    exc = types.SimpleNamespace(
+        APIError=type("APIError", (Exception,), {}),
+        SpreadsheetNotFound=type("SpreadsheetNotFound", (Exception,), {}),
+        WorksheetNotFound=type("WorksheetNotFound", (Exception,), {}),
+    )
+    mod.exceptions = exc
+    created = []
+
+    class Spreadsheet:
+        title = "S"
+
+        def worksheet(self, name):
+            if name not in tabs:
+                raise exc.WorksheetNotFound()
+            return object()
+
+        def worksheets(self):
+            return [types.SimpleNamespace(title=t) for t in tabs]
+
+        def add_worksheet(self, **kw):
+            created.append(kw["title"])
+            return object()
+
+    mod.service_account_from_dict = lambda info, scopes: types.SimpleNamespace(
+        open_by_key=lambda key: Spreadsheet())
+    monkeypatch.setitem(sys.modules, "gspread", mod)
+    return created
+
+
+def test_missing_tab_is_not_created_when_strict(monkeypatch):
+    from x_inbox import sheets
+    created = _fake_gspread(monkeypatch, ["README", "TREND_SIGNAL"])
+    with pytest.raises(sheets.SheetError) as err:
+        sheets.open_worksheet("id", "typo", SERVICE_ACCOUNT, ["a"], create_missing=False)
+    assert "README" in str(err.value) and created == []
+
+
+def test_missing_tab_is_created_by_default(monkeypatch):
+    from x_inbox import sheets
+    created = _fake_gspread(monkeypatch, ["README"])
+    sheets.open_worksheet("id", "new", SERVICE_ACCOUNT, ["a"])
+    assert created == ["new"]

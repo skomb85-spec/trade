@@ -16,5 +16,6 @@
     "summary"
   ],
   "inbox_dir": "japan_thesis_inbox",
-  "archive_dir": "japan_thesis_inbox/archive"
+  "archive_dir": "japan_thesis_inbox/archive",
+  "strict": true
 }

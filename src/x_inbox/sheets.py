@@ -6,6 +6,7 @@ and the offline tests -- work without the dependency installed.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Sequence
 
 # Appending by key needs nothing from Drive, so only ask for Sheets.
@@ -31,6 +32,17 @@ class GoogleSheet:
         self._ws.update(range_name="A1", values=[list(header)],
                         value_input_option="RAW")
 
+    def other_tabs(self) -> list[tuple[str, int, str]]:
+        """(title, row count, content hash) of every *other* tab, read-only."""
+        out = []
+        for ws in self._ws.spreadsheet.worksheets():
+            if ws.id == self._ws.id:
+                continue
+            values = ws.get_all_values()
+            digest = hashlib.sha1(repr(values).encode("utf-8")).hexdigest()[:12]
+            out.append((ws.title, len(values), digest))
+        return out
+
     def append(self, rows: Sequence[Sequence[str]]) -> None:
         # RAW, not USER_ENTERED: a cell starting with "=" is text, not a formula.
         self._ws.append_rows([list(r) for r in rows], value_input_option="RAW",
@@ -38,7 +50,8 @@ class GoogleSheet:
 
 
 def open_worksheet(spreadsheet_id: str, worksheet_name: str,
-                   credentials_info: dict, columns: Sequence[str]) -> GoogleSheet:
+                   credentials_info: dict, columns: Sequence[str],
+                   create_missing: bool = True) -> GoogleSheet:
     try:
         import gspread
     except ImportError as exc:  # pragma: no cover - only hit outside CI
@@ -64,6 +77,13 @@ def open_worksheet(spreadsheet_id: str, worksheet_name: str,
     try:
         worksheet = spreadsheet.worksheet(worksheet_name)
     except gspread.exceptions.WorksheetNotFound:
+        if not create_missing:
+            names = ", ".join(w.title for w in spreadsheet.worksheets())
+            raise SheetError(
+                f"タブ「{worksheet_name}」がありません（あるタブ: {names}）。\n"
+                "  → config.json の \"worksheet\" がシートのタブ名と一致しているか確認してください。"
+                "タブは自動作成しません。"
+            )
         worksheet = spreadsheet.add_worksheet(
             title=worksheet_name, rows=1000, cols=max(len(columns), 26))
     except gspread.exceptions.APIError as exc:

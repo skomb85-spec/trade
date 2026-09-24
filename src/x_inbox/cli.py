@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from . import core
-from .core import ConfigError, CredentialsError
+from .core import ConfigError, CredentialsError, StructureError
 from .sheets import SheetError
 
 
@@ -53,14 +53,15 @@ def main(argv: list[str] | None = None, *, open_target=None,
         if args.check:
             return _check(cfg, env, opener)
         return _run(cfg, args, env, opener, today)
-    except (ConfigError, CredentialsError, SheetError) as exc:
+    except (ConfigError, CredentialsError, SheetError, StructureError) as exc:
         print(f"\nerror: {exc}", file=sys.stderr)
         return 1
 
 
 def _open_google_sheet(cfg: core.Config, credentials_info: dict):
     from .sheets import open_worksheet
-    return open_worksheet(cfg.spreadsheet_id, cfg.worksheet, credentials_info, cfg.columns)
+    return open_worksheet(cfg.spreadsheet_id, cfg.worksheet, credentials_info,
+                          cfg.columns, create_missing=not cfg.strict)
 
 
 def _connect(cfg: core.Config, env: dict[str, str], opener):
@@ -80,7 +81,14 @@ def _check(cfg: core.Config, env: dict[str, str], opener) -> int:
     print("header:    " + (", ".join(header) if header else "(なし)"))
     if needs_header:
         print("note:      シートが空なので、最初の追記時に config.json の列名を1行目に書きます。")
-    print("\nOK: 接続できました。あとは x_inbox/ にCSVを置いてpushするだけです。")
+    others = getattr(target, "other_tabs", None)
+    if others:
+        for title, rows, digest in others():
+            print(f"other tab: {title} rows={rows} sha1={digest}")
+    if cfg.strict:
+        _require_structure(cfg, values, header, needs_header, csv_columns=())
+        print("structure: OK（列見出しがconfig.jsonの columns と一致）")
+    print(f"\nOK: 接続できました。あとは {cfg.inbox_dir}/ にCSVを置いてpushするだけです。")
     return 0
 
 
@@ -107,10 +115,13 @@ def _run(cfg: core.Config, args, env: dict[str, str], opener,
         target = _connect(cfg, env, opener)
         values = target.read_values()
         header, needs_header = core.resolve_header(values, cfg.columns)
-        known = core.existing_keys(values, header, cfg.key_column)
+        if cfg.strict:
+            csv_cols = {name for rec in records for name in rec}
+            _require_structure(cfg, values, header, needs_header, csv_cols)
+        known = core.existing_keys(values, header, cfg.key_column, cfg.normalize_key)
         print(f"sheet:     既存 {len(known)} 行を重複チェックに使います。")
 
-    plan = core.plan_append(records, header, cfg.key_column, known)
+    plan = core.plan_append(records, header, cfg.key_column, known, cfg.normalize_key)
     rows = list(plan.rows)
     if args.limit is not None and len(rows) > args.limit:
         print(f"note: --limit {args.limit} により {len(rows) - args.limit} 行を今回は見送ります。")
@@ -144,6 +155,17 @@ def _run(cfg: core.Config, args, env: dict[str, str], opener,
 
     _report(env, appended=len(rows), duplicates=plan.duplicates, archived=archived)
     return 0
+
+
+def _require_structure(cfg: core.Config, values, header, needs_header: bool,
+                       csv_columns) -> None:
+    """strict mode: stop (raise) rather than write into a sheet that does not match."""
+    problems = core.structure_problems(header, cfg.columns, csv_columns,
+                                       cfg.key_column, sheet_is_empty=needs_header)
+    if problems:
+        raise StructureError(
+            "構造の不一致のため停止しました（何も追記せず、CSVも移動していません）。\n  - "
+            + "\n  - ".join(problems))
 
 
 def _warn(plan: core.AppendPlan, cfg: core.Config) -> None:

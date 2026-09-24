@@ -1,7 +1,7 @@
 {
   "spreadsheet_id": "1uvwvFhVfYseLxAehIgnZDKlPD981BqR8W4Ht0Un0KjI",
   "worksheet": "XリサーチINBOX",
-  "key_column": "",
+  "key_column": "投稿URL",
   "columns": [
     "収集日時",
     "テーマ",
@@ -20,8 +20,11 @@
     "規模対比の所見",
     "なぜ伸びた可能性があるか",
     "冒頭フック",
-    "投稿構造"
+    "投稿構造",
+    "特徴的な切り口",
+    "備考"
   ],
   "inbox_dir": "x_inbox",
-  "archive_dir": "x_inbox/archive"
+  "archive_dir": "x_inbox/archive",
+  "strict": true
 }
