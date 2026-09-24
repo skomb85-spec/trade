@@ -1,0 +1,2 @@
+collected_at,handle,display_name,ticker,company,post_created_at,post_text,source_url,topic,stance,summary
+2026-09-24 11:30 JST,_pipeline_test,疎通テスト(削除可),,,,,https://example.com/pipeline-test-japan-blank-ticker,test,,ticker空欄の重複テスト
