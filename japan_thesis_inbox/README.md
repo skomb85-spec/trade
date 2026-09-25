@@ -8,6 +8,10 @@ Grok → `japan_thesis_inbox/*.csv` を `main` へpush → GitHub Actions → Go
 - 処理済みCSV: `japan_thesis_inbox/archive/<日付>/` へ移動
 - 認証: `x_inbox` と同じ Secret `GOOGLE_SERVICE_ACCOUNT_JSON`。シートを、そのサービスアカウントに「編集者」で共有しておく
 
+## 行チェック
+
+共通の行チェックで壊れたCSV（列数違い・断片行・`SEE_ARTIFACT_FILE`・必須列が空・引用符なしの改行）は丸ごと拒否されます。詳細は [x_inbox/README.md](../x_inbox/README.md) の「CSVの行チェック」。ticker は空欄でも通ります（必須は `collected_at, handle, display_name, post_created_at, post_text, source_url, topic, stance, summary`）。
+
 ## Grokに渡す仕様
 
 - 置き場所: `japan_thesis_inbox/` 直下に `.csv`（UTF-8、1行目はヘッダー、サブフォルダ不可）

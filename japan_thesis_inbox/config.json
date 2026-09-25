@@ -15,6 +15,17 @@
     "stance",
     "summary"
   ],
+  "required_columns": [
+    "collected_at",
+    "handle",
+    "display_name",
+    "post_created_at",
+    "post_text",
+    "source_url",
+    "topic",
+    "stance",
+    "summary"
+  ],
   "inbox_dir": "japan_thesis_inbox",
   "archive_dir": "japan_thesis_inbox/archive",
   "strict": true

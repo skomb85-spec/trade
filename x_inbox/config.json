@@ -24,6 +24,12 @@
     "特徴的な切り口",
     "備考"
   ],
+  "required_columns": [
+    "投稿URL",
+    "投稿者名",
+    "アカウント",
+    "投稿本文"
+  ],
   "inbox_dir": "x_inbox",
   "archive_dir": "x_inbox/archive",
   "strict": true

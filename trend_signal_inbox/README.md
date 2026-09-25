@@ -7,6 +7,10 @@ Grok → `trend_signal_inbox/*.csv` を `main` へpush → GitHub Actions → �
 - 停止条件（何も書かず、CSVも移動しない）: シートの列見出しが `config.json` の `columns` と違う / CSVにシートにない列がある / 重複キー列がCSVにない / タブが無い。
 - 他のタブ（README / SNS_HANDOFF / PPC_HANDOFF）には書かない。
 
+## 行チェック
+
+共通の行チェックで壊れたCSV（列数違い・断片行・`SEE_ARTIFACT_FILE`・必須列が空・引用符なしの改行）は丸ごと拒否されます。詳細は [x_inbox/README.md](../x_inbox/README.md) の「CSVの行チェック」。`使用日時`・`成果` は空欄で通ります。元ネタが分からないときは空欄でなく `不明` と書きます（必須は `signal_id, 発見日時, source, 元ネタ, 派生ワード, 事実/推測, status`）。
+
 ## Grokに渡す仕様
 
 `trend_signal_inbox/` 直下に `.csv`（UTF-8、1行目ヘッダー）。列名はこのまま（24列）:

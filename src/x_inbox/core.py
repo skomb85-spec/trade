@@ -14,6 +14,7 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import re
 import shutil
 import unicodedata
 from dataclasses import dataclass, replace
@@ -46,6 +47,7 @@ class Config:
     archive_dir: Path
     normalize_key: bool = False
     strict: bool = False
+    required_columns: tuple[str, ...] = ()
 
 
 def load_config(path: Path | str) -> Config:
@@ -76,7 +78,15 @@ def load_config(path: Path | str) -> Config:
                 f'{path}: "key_column" に {part!r} とありますが "columns" に同じ名前がありません。'
             )
 
+    required = tuple(str(c).strip() for c in raw.get("required_columns", ()) if str(c).strip())
+    for name in required:
+        if name not in columns:
+            raise ConfigError(
+                f'{path}: "required_columns" に {name!r} とありますが "columns" に同じ名前がありません。'
+            )
+
     return Config(
+        required_columns=required,
         spreadsheet_id=str(raw.get("spreadsheet_id", "")).strip(),
         worksheet=str(raw.get("worksheet", "")).strip() or "Sheet1",
         key_column=key_column,
@@ -152,6 +162,84 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
             if any(record.values()):
                 records.append(record)
     return records
+
+
+# ----------------------------------------------------------------- validation
+
+# Grok sometimes writes this token instead of the real file content.
+ARTIFACT_PLACEHOLDER = re.compile(r"SEE[_\s-]*ARTIFACT", re.IGNORECASE)
+MAX_REPORTED_PROBLEMS = 20
+
+
+@dataclass(frozen=True)
+class CsvProblem:
+    path: Path
+    line: int | str
+    message: str
+
+    def __str__(self) -> str:
+        return f"{self.path}:{self.line}: {self.message}"
+
+
+def validate_csv_file(path: Path, required: Sequence[str] = ()) -> list[CsvProblem]:
+    """Structural check of one inbox CSV, before anything is read for real.
+
+    A row that is too short, too long, a lone fragment, an artifact placeholder,
+    or missing a required cell means the file is broken (typically a newline
+    inside a cell that was not quoted). The caller rejects the whole file.
+    """
+    path = Path(path)
+    problems: list[CsvProblem] = []
+
+    def add(line: int, message: str) -> None:
+        problems.append(CsvProblem(path, line, message))
+
+    with path.open(newline="", encoding="utf-8-sig") as fh:
+        reader = csv.reader(fh, strict=True)
+        try:
+            header = next(reader, None)
+        except csv.Error as exc:
+            return [CsvProblem(path, reader.line_num, f"CSVとして読めません（{exc}）")]
+        if header is None:
+            return []
+        names = [(n or "").strip() for n in header]
+        width = len(names)
+        missing = [name for name in required if name not in names]
+        if missing:
+            add(1, "必須列がヘッダーにありません: " + ", ".join(missing))
+            return problems
+        required_at = [(name, names.index(name)) for name in required]
+
+        while True:
+            start = reader.line_num + 1
+            try:
+                row = next(reader)
+            except StopIteration:
+                break
+            except csv.Error as exc:
+                add(reader.line_num, f"CSVとして読めません（{exc}）。引用符が閉じていない可能性があります")
+                break
+            end = reader.line_num
+            where = start if end == start else f"{start}〜{end}"
+            filled = sum(1 for c in row if c.strip())
+            if filled == 0:
+                continue
+
+            reasons: list[str] = []
+            if len(row) != width:
+                reasons.append(f"列数が{len(row)}個です（ヘッダーは{width}列）。"
+                               "セル内の改行が引用符で囲まれていない可能性があります")
+            if width > 2 and filled == 1:
+                reasons.append("値が1セルだけの断片行です")
+            if any(ARTIFACT_PLACEHOLDER.search(c) for c in row):
+                reasons.append("SEE_ARTIFACT_FILE 等のアーティファクト置換文字列が入っています")
+            if len(row) == width:
+                empty = [name for name, i in required_at if not row[i].strip()]
+                if empty:
+                    reasons.append("必須項目が空です: " + ", ".join(empty))
+            if reasons:
+                add(where, "／".join(reasons))
+    return problems
 
 
 # ------------------------------------------------------------------- dedupe

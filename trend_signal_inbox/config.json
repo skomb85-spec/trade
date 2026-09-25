@@ -28,6 +28,15 @@
     "成果",
     "メモ"
   ],
+  "required_columns": [
+    "signal_id",
+    "発見日時",
+    "source",
+    "元ネタ",
+    "派生ワード",
+    "事実/推測",
+    "status"
+  ],
   "strict": true,
   "normalize_key": true,
   "inbox_dir": "trend_signal_inbox",

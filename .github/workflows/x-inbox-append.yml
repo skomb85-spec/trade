@@ -62,7 +62,7 @@ jobs:
       # 追記が終わったCSVは x_inbox/archive/<日付>/ に移してコミットする。
       # [skip ci] を付けるのは、このコミットでワークフローが再起動しないように。
       - name: Commit the archived CSVs
-        if: steps.append.outputs.archived == 'true'
+        if: always() && steps.append.outputs.archived == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

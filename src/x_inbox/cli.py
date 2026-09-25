@@ -100,6 +100,11 @@ def _run(cfg: core.Config, args, env: dict[str, str], opener,
         _report(env, appended=0, duplicates=0, archived=False)
         return 0
 
+    files, rejected = _split_valid(files, cfg, env)
+    if not files:
+        _report(env, appended=0, duplicates=0, archived=False)
+        return 1
+
     records: list[dict[str, str]] = []
     for path in files:
         rows = core.read_csv_rows(path)
@@ -135,7 +140,7 @@ def _run(cfg: core.Config, args, env: dict[str, str], opener,
         _preview(header, rows)
         print("\n(--dry-run のため書き込みもファイル移動もしていません)")
         _report(env, appended=0, duplicates=plan.duplicates, archived=False)
-        return 0
+        return 1 if rejected else 0
 
     if rows:
         if needs_header:
@@ -154,7 +159,29 @@ def _run(cfg: core.Config, args, env: dict[str, str], opener,
             print(f"archived: {src} -> {dest}")
 
     _report(env, appended=len(rows), duplicates=plan.duplicates, archived=archived)
-    return 0
+    return 1 if rejected else 0
+
+
+def _split_valid(files: list[Path], cfg: core.Config,
+                 env: dict[str, str]) -> tuple[list[Path], list[Path]]:
+    """Validate each CSV. Broken ones are reported and left untouched in the inbox."""
+    valid: list[Path] = []
+    rejected: list[Path] = []
+    for path in files:
+        problems = core.validate_csv_file(path, cfg.required_columns)
+        if not problems:
+            valid.append(path)
+            continue
+        rejected.append(path)
+        print(f"\nerror: {path} は構造に問題があるため丸ごと拒否しました"
+              "（シートに書かず、archiveもしません）。", file=sys.stderr)
+        for problem in problems[:core.MAX_REPORTED_PROBLEMS]:
+            print(f"  {problem}", file=sys.stderr)
+            if env.get("GITHUB_ACTIONS"):
+                print(f"::error file={problem.path},line={str(problem.line).split('〜')[0]}::{problem.message}")
+        if len(problems) > core.MAX_REPORTED_PROBLEMS:
+            print(f"  ...ほか {len(problems) - core.MAX_REPORTED_PROBLEMS} 件", file=sys.stderr)
+    return valid, rejected
 
 
 def _require_structure(cfg: core.Config, values, header, needs_header: bool,

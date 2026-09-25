@@ -484,3 +484,221 @@ def test_missing_tab_is_created_by_default(monkeypatch):
     created = _fake_gspread(monkeypatch, ["README"])
     sheets.open_worksheet("id", "new", SERVICE_ACCOUNT, ["a"])
     assert created == ["new"]
+
+
+# --------------------------------------------------------- CSV row validation
+
+REPO = Path(__file__).resolve().parents[1]
+REQUIRED = {
+    "x_inbox": ["投稿URL", "投稿者名", "アカウント", "投稿本文"],
+    "japan_thesis_inbox": ["collected_at", "handle", "display_name", "post_created_at",
+                           "post_text", "source_url", "topic", "stance", "summary"],
+    "trend_signal_inbox": ["signal_id", "発見日時", "source", "元ネタ", "派生ワード",
+                           "事実/推測", "status"],
+}
+V_COLUMNS = ["id", "author", "text", "url"]
+
+
+def vcfg(tmp_path, **extra):
+    return write_config(tmp_path, strict=True, columns=V_COLUMNS, key_column="url",
+                        required_columns=["id", "author", "text", "url"], **extra)
+
+
+def csv_text(*rows):
+    import csv as _csv
+    import io
+    buf = io.StringIO()
+    _csv.writer(buf, lineterminator="\n").writerows(rows)
+    return buf.getvalue()
+
+
+def validate(tmp_path, body, required=("id", "text", "url")):
+    return core.validate_csv_file(write_csv(tmp_path, "v.csv", body), required)
+
+
+def test_quoted_multiline_cell_is_one_valid_record(tmp_path):
+    body = csv_text(V_COLUMNS, ["1", "@a", "line1\nline2\n\nline4", "https://x.com/1"])
+    assert validate(tmp_path, body) == []
+    sheet = FakeSheet([V_COLUMNS])
+    write_csv(tmp_path, "a.csv", body)
+    assert run(vcfg(tmp_path), sheet) == 0
+    assert sheet.values[1][2] == "line1\nline2\n\nline4"
+    assert len(sheet.values) == 2
+
+
+def test_unquoted_newline_splits_the_row_and_fails_with_line_numbers(tmp_path):
+    body = "id,author,text,url\n1,@a,first line\nsecond line,https://x.com/1\n"
+    problems = validate(tmp_path, body)
+    assert [p.line for p in problems] == [2, 3]
+    assert all("列数" in p.message for p in problems)
+    assert "v.csv:2:" in str(problems[0])
+
+
+def test_split_csv_is_rejected_whole_and_not_archived(tmp_path, capsys):
+    config = vcfg(tmp_path)
+    sheet = FakeSheet([V_COLUMNS])
+    good = "id,author,text,url\n9,@z,ok,https://x.com/9\n"
+    write_csv(tmp_path, "bad.csv", "id,author,text,url\n1,@a,first\nsecond,https://x.com/1\n")
+    assert run(config, sheet) == 1
+    assert sheet.values == [V_COLUMNS]                       # nothing appended
+    assert (tmp_path / "inbox" / "bad.csv").exists()          # not archived
+    assert not (tmp_path / "inbox" / "archive").exists()
+    err = capsys.readouterr().err
+    assert "bad.csv" in err and "bad.csv:2:" in err
+
+    write_csv(tmp_path, "good.csv", good)                     # a valid file next to it still goes through
+    assert run(config, sheet) == 1
+    assert [r[0] for r in sheet.values[1:]] == ["9"]
+    assert (tmp_path / "inbox" / "bad.csv").exists()
+    assert not (tmp_path / "inbox" / "good.csv").exists()
+
+
+def test_extra_columns_fail(tmp_path):
+    problems = validate(tmp_path, "id,author,text,url\n1,@a,hi,https://x.com/1,oops\n")
+    assert len(problems) == 1 and "5個" in problems[0].message
+
+
+def test_missing_columns_fail(tmp_path):
+    problems = validate(tmp_path, "id,author,text,url\n1,@a,hi\n")
+    assert len(problems) == 1 and "3個" in problems[0].message
+
+
+@pytest.mark.parametrize("row", [["1", "@a", "hi", ""], ["", "@a", "hi", "https://x.com/1"],
+                                 ["1", "@a", "   ", "https://x.com/1"]])
+def test_blank_required_field_fails(tmp_path, row):
+    problems = validate(tmp_path, csv_text(V_COLUMNS, row))
+    assert len(problems) == 1 and "必須項目が空" in problems[0].message
+
+
+def test_missing_required_header_fails(tmp_path):
+    problems = validate(tmp_path, "id,author,text\n1,@a,hi\n")
+    assert len(problems) == 1 and problems[0].line == 1 and "url" in problems[0].message
+
+
+def test_lone_fragment_row_fails(tmp_path):
+    problems = validate(tmp_path, "id,author,text,url\n1,@a,hi,https://x.com/1\nこれかな？\n",
+                        required=())
+    assert [p.line for p in problems] == [3]
+    assert "断片" in problems[0].message
+
+
+@pytest.mark.parametrize("cell", ["SEE_ARTIFACT_FILE", "see_artifact_file", "SEE ARTIFACT FILE"])
+def test_artifact_placeholder_fails(tmp_path, cell):
+    body = csv_text(V_COLUMNS, ["1", "@a", cell, "https://x.com/1"])
+    problems = validate(tmp_path, body)
+    assert len(problems) == 1 and "アーティファクト" in problems[0].message
+
+
+def test_placeholder_only_row_fails_even_without_required_columns(tmp_path):
+    problems = validate(tmp_path, "id,author,text,url\nSEE_ARTIFACT_FILE\n", required=())
+    assert len(problems) == 1 and "アーティファクト" in problems[0].message
+
+
+def test_unterminated_quote_fails(tmp_path):
+    problems = validate(tmp_path, 'id,author,text,url\n1,@a,"never closed,https://x.com/1\n')
+    assert problems and "CSVとして読めません" in problems[0].message
+
+
+def test_blank_lines_and_bom_are_fine(tmp_path):
+    body = "﻿id,author,text,url\n\n1,@a,hi,https://x.com/1\n\n"
+    assert validate(tmp_path, body) == []
+
+
+def test_quoted_comma_is_fine_but_unquoted_comma_fails(tmp_path):
+    ok = csv_text(V_COLUMNS, ["1", "@a", "( ´,_ゝ`)", "https://x.com/1"])
+    assert validate(tmp_path, ok) == []
+    problems = validate(tmp_path, "id,author,text,url\n1,@a,( ´,_ゝ`),https://x.com/1\n")
+    assert len(problems) == 1 and "5個" in problems[0].message
+
+
+def test_dry_run_also_rejects_and_touches_nothing(tmp_path):
+    config = vcfg(tmp_path)
+    path = write_csv(tmp_path, "bad.csv", "id,author,text,url\nSEE_ARTIFACT_FILE\n")
+    assert run(config, FakeSheet([V_COLUMNS]), "--dry-run") == 1
+    assert path.exists()
+
+
+def test_valid_csv_still_appends_dedupes_and_archives(tmp_path):
+    config = vcfg(tmp_path)
+    sheet = FakeSheet([V_COLUMNS])
+    body = csv_text(V_COLUMNS, ["1", "@a", "hi", "https://x.com/1"],
+                    ["2", "@b", "yo", "https://x.com/2"])
+    write_csv(tmp_path, "a.csv", body)
+    assert run(config, sheet) == 0
+    assert len(sheet.values) == 3
+    assert not (tmp_path / "inbox" / "a.csv").exists()
+    assert (tmp_path / "inbox" / "archive" / "2026-09-22" / "a.csv").exists()
+
+    write_csv(tmp_path, "b.csv", body)                        # same rows again
+    assert run(config, sheet) == 0
+    assert len(sheet.values) == 3                             # not duplicated
+    assert (tmp_path / "inbox" / "archive" / "2026-09-22" / "b.csv").exists()
+
+
+def test_required_columns_must_be_real_columns(tmp_path):
+    config = write_config(tmp_path, required_columns=["nope"])
+    with pytest.raises(core.ConfigError):
+        core.load_config(config)
+
+
+def test_config_without_required_columns_only_checks_structure(tmp_path):
+    config = write_config(tmp_path, strict=True)
+    sheet = FakeSheet([list(COLUMNS)])
+    write_csv(tmp_path, "a.csv", "id,text\n,hi\n")            # blank id is allowed here
+    assert run(config, sheet) == 0
+    assert len(sheet.values) == 2
+
+
+# The three real pipelines: their configs carry the agreed required lists, and the
+# cases the pipelines must keep accepting (blank ticker, blank 使用日時/成果) pass.
+
+@pytest.mark.parametrize("pipeline", sorted(REQUIRED))
+def test_real_config_declares_the_required_columns(pipeline):
+    cfg = core.load_config(REPO / pipeline / "config.json")
+    assert list(cfg.required_columns) == REQUIRED[pipeline]
+    assert cfg.strict
+
+
+def real_row(pipeline, **blank):
+    cfg = core.load_config(REPO / pipeline / "config.json")
+    row = [("" if name in blank else f"{name}-値") for name in cfg.columns]
+    return list(cfg.columns), row, cfg
+
+
+def test_japan_thesis_blank_ticker_passes_but_blank_source_url_fails(tmp_path):
+    header, row, cfg = real_row("japan_thesis_inbox", ticker=True)
+    path = write_csv(tmp_path, "j.csv", csv_text(header, row))
+    assert core.validate_csv_file(path, cfg.required_columns) == []
+    header, row, cfg = real_row("japan_thesis_inbox", source_url=True)
+    path = write_csv(tmp_path, "j2.csv", csv_text(header, row))
+    problems = core.validate_csv_file(path, cfg.required_columns)
+    assert len(problems) == 1 and "source_url" in problems[0].message
+
+
+def test_japan_thesis_blank_company_follows_the_existing_rule(tmp_path):
+    header, row, cfg = real_row("japan_thesis_inbox", company=True)
+    path = write_csv(tmp_path, "j.csv", csv_text(header, row))
+    assert core.validate_csv_file(path, cfg.required_columns) == []
+
+
+def test_trend_signal_blank_usage_and_result_pass_and_unknown_source_is_allowed(tmp_path):
+    header, row, cfg = real_row("trend_signal_inbox", **{"使用日時": True, "成果": True})
+    row[header.index("元ネタ")] = "不明"
+    path = write_csv(tmp_path, "t.csv", csv_text(header, row))
+    assert core.validate_csv_file(path, cfg.required_columns) == []
+    header, row, cfg = real_row("trend_signal_inbox", **{"元ネタ": True})
+    path = write_csv(tmp_path, "t2.csv", csv_text(header, row))
+    assert len(core.validate_csv_file(path, cfg.required_columns)) == 1
+
+
+def test_x_research_blank_url_fails(tmp_path):
+    header, row, cfg = real_row("x_inbox", **{"投稿URL": True})
+    path = write_csv(tmp_path, "x.csv", csv_text(header, row))
+    problems = core.validate_csv_file(path, cfg.required_columns)
+    assert len(problems) == 1 and "投稿URL" in problems[0].message
+
+
+def test_committed_example_csv_is_valid():
+    cfg = core.load_config(REPO / "x_inbox" / "config.json")
+    assert core.validate_csv_file(REPO / "x_inbox" / "examples" / "sample.csv",
+                                  cfg.required_columns) == []
