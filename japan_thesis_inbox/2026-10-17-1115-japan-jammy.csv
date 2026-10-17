@@ -1,1 +1,13 @@
-PLACEHOLDER
+collected_at,handle,display_name,ticker,company,post_created_at,post_text,source_url,topic,stance,summary
+2026-10-17 11:15:00,jammy_bot,JAMMY,471A,NSグループ,2026-10-17 11:10:27,"471ANSグループ
+4169ENECHANGE
+581AGO
+247AAIロボティクス
+156AマテリアルG
+135AVRAIN
+1475TOPIX ETF
+7047ポート
+2579コカコーラ
+286Aユカリア
+3901マークラインズ
+4374ロボペイ",https://x.com/jammy_bot/status/2111278639556006134,売買,中立,週末ポートフォリオの銘柄一覧として言及。
