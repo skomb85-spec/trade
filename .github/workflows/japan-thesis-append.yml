@@ -49,6 +49,8 @@ jobs:
           elif [ "${{ inputs.dry_run }}" = "true" ]; then
             python -m x_inbox --config japan_thesis_inbox/config.json --dry-run
           else
+            # Repair only unambiguously recoverable Grok multiline post_text fields.
+            python japan_thesis_inbox/repair_csv.py
             python -m x_inbox --config japan_thesis_inbox/config.json
           fi
 
