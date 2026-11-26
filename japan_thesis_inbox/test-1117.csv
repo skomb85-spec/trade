@@ -1,0 +1,2 @@
+collected_at,handle,display_name,ticker,company,post_created_at,post_text,source_url,topic,stance,summary
+2026-11-26 11:17,test,Test User,,TestCo,2026-11-26 10:00:00,Test post text,https://x.com/test/status/1,その他,中立,Test summary
